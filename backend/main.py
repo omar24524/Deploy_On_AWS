@@ -1,15 +1,48 @@
 from fastapi import FastAPI, UploadFile, File
-from llama_cpp import Llama
 import pypdf
 import io
+import sqlite3
+import json
+from datetime import datetime
 
 app = FastAPI()
 
-# Load the model
-llm = Llama(
-    model_path="../models/phi-3-mini-4k-instruct.Q4_K_M.gguf",
-    n_ctx=2048
-)
+# Global model variable
+llm = None
+
+# Initialize database
+def init_db():
+    conn = sqlite3.connect('resumes.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS parsed_resumes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            filename TEXT,
+            json_data TEXT
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+def get_llm():
+    global llm
+    if llm is None:
+        import os
+        os.environ['LLAMA_CPP_DISABLE_PREFETCH'] = '1'  # Fix for Windows PrefetchVirtualMemory issue
+        try:
+            from llama_cpp import Llama
+            llm = Llama(
+                model_path="../models/phi-3-mini-4k-instruct.Q4_K_M.gguf",
+                n_ctx=2048,
+                n_gpu_layers=0,  # Force CPU mode for Windows compatibility
+                verbose=True
+            )
+        except Exception as e:
+            raise RuntimeError(f"Failed to load the AI model: {str(e)}. Please check the model file and llama-cpp-python installation.")
+    return llm
+
+init_db()
 
 @app.post("/parse")
 async def parse_resume(file: UploadFile = File(...)):
@@ -74,7 +107,8 @@ async def parse_resume(file: UploadFile = File(...)):
     
     # 3. Increased max_tokens to accommodate the larger JSON output
     # 3. Increased max_tokens and set temperature to ZERO
-    response = llm(
+    llm_instance = get_llm()
+    response = llm_instance(
         prompt,
         max_tokens=1500, 
         temperature=0.0,  # <--- ADD THIS LINE to stop hallucinations
@@ -82,4 +116,35 @@ async def parse_resume(file: UploadFile = File(...)):
         echo=False
     )
     
-    return {"result": response['choices'][0]['text']}
+    result_text = response['choices'][0]['text']
+    
+    # Save to database
+    conn = sqlite3.connect('resumes.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO parsed_resumes (timestamp, filename, json_data)
+        VALUES (?, ?, ?)
+    ''', (datetime.now().isoformat(), file.filename, result_text))
+    conn.commit()
+    conn.close()
+    
+    return {"result": result_text}
+
+@app.get("/stored")
+async def get_stored_resumes():
+    conn = sqlite3.connect('resumes.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT id, timestamp, filename, json_data FROM parsed_resumes ORDER BY timestamp DESC')
+    rows = cursor.fetchall()
+    conn.close()
+    
+    resumes = []
+    for row in rows:
+        resumes.append({
+            "id": row[0],
+            "timestamp": row[1],
+            "filename": row[2],
+            "json_data": row[3]
+        })
+    
+    return {"resumes": resumes}
