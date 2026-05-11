@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+pydantic
+pypdf
+python-multipart
+google-generativeai
+python-dotenv
+# Note for Windows users: install llama-cpp-python via pre-built wheels if compilation fails
+llama-cpp-python==0.2.90
