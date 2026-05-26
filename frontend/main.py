@@ -1,11 +1,16 @@
 import streamlit as st
 import requests
 import json
+import uuid
 
 st.set_page_config(layout="wide")
 
 st.title("📄 Comprehensive AI Resume Parser")
 st.markdown("Upload a candidate's PDF resume to extract their full profile or view previously parsed resumes.")
+
+# Auto-generate unique session ID for this browser/user
+if "session_id" not in st.session_state:
+    st.session_state.session_id = str(uuid.uuid4())
 
 tab1, tab2 = st.tabs(["📤 Parse New Resume", "📚 View Stored Resumes"])
 
@@ -21,7 +26,11 @@ with tab1:
                 clean_string = ""  # Initialize to avoid NameError
                 
                 try:
-                    response = requests.post("http://127.0.0.1:8000/parse", files=files)
+                    response = requests.post(
+                        "http://127.0.0.1:8000/parse",
+                        files=files,
+                        params={"user_id": st.session_state.session_id}
+                    )
                     response_data = response.json()
                     
                     clean_string = response_data["result"].replace("```json", "").replace("```", "").strip()
@@ -96,7 +105,10 @@ with tab2:
     st.subheader("Previously Parsed Resumes")
     
     try:
-        response = requests.get("http://127.0.0.1:8000/stored")
+        response = requests.get(
+            "http://127.0.0.1:8000/stored",
+            params={"user_id": st.session_state.session_id}
+        )
         data = response.json()
         resumes = data.get("resumes", [])
         

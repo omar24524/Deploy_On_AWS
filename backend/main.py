@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, Query
 import pypdf
 import io
 import sqlite3
@@ -17,11 +17,14 @@ def init_db():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS parsed_resumes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
             timestamp TEXT,
             filename TEXT,
             json_data TEXT
         )
     ''')
+    # Add index for faster user lookups
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_user_id ON parsed_resumes(user_id)')
     conn.commit()
     conn.close()
 
@@ -35,7 +38,7 @@ def get_llm():
             llm = Llama(
                 model_path="../models/phi-3-mini-4k-instruct.Q4_K_M.gguf",
                 n_ctx=2048,
-                n_gpu_layers=0,  # Force CPU mode for Windows compatibility
+                # n_gpu_layers=0,  # Force CPU mode for Windows compatibility
                 verbose=True
             )
         except Exception as e:
@@ -45,7 +48,7 @@ def get_llm():
 init_db()
 
 @app.post("/parse")
-async def parse_resume(file: UploadFile = File(...)):
+async def parse_resume(file: UploadFile = File(...), user_id: str = Query(...)):
     
     # 1. Read the PDF
     pdf_content = await file.read()
@@ -118,23 +121,23 @@ async def parse_resume(file: UploadFile = File(...)):
     
     result_text = response['choices'][0]['text']
     
-    # Save to database
+    # Save to database with user_id
     conn = sqlite3.connect('resumes.db')
     cursor = conn.cursor()
     cursor.execute('''
-        INSERT INTO parsed_resumes (timestamp, filename, json_data)
-        VALUES (?, ?, ?)
-    ''', (datetime.now().isoformat(), file.filename, result_text))
+        INSERT INTO parsed_resumes (user_id, timestamp, filename, json_data)
+        VALUES (?, ?, ?, ?)
+    ''', (user_id, datetime.now().isoformat(), file.filename, result_text))
     conn.commit()
     conn.close()
     
     return {"result": result_text}
 
 @app.get("/stored")
-async def get_stored_resumes():
+async def get_stored_resumes(user_id: str = Query(...)):
     conn = sqlite3.connect('resumes.db')
     cursor = conn.cursor()
-    cursor.execute('SELECT id, timestamp, filename, json_data FROM parsed_resumes ORDER BY timestamp DESC')
+    cursor.execute('SELECT id, timestamp, filename, json_data FROM parsed_resumes WHERE user_id = ? ORDER BY timestamp DESC', (user_id,))
     rows = cursor.fetchall()
     conn.close()
     
